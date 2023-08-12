@@ -48,8 +48,8 @@ RUN wget https://bootstrap.pypa.io/pip/2.7/get-pip.py && \
     python -m pip install --user -r ./requirements.txt && \
     python -m pip install --user notebook boost
 
-RUN apt update && \
-    apt install -y \
+RUN apt-get update && \
+    apt-get install -y \
         libboost-all-dev \
         python2-dev \
         python3-dev
