@@ -1,3 +1,5 @@
+#Adapted from https://github.com/wnhsu/FactorizedHierarchicalVAE/blob/github_FHVAE/src/models/base_fhvae.py
+
 """Base Factorized Hierarchical Variational Autoencoder"""
 
 from __future__ import absolute_import
@@ -81,8 +83,11 @@ class BaseFacHierVAE(object):
                             "target_dtype": tf.float32,
                             "n_latent1": 64,
                             "n_latent2": 64,
+                            "n_latent3": 64,
                             "n_class1": None,
+                            "n_class3": None,
                             "latent1_std": 0.5,
+                            "latent3_std": 0.5,
                             "x_conti": True,
                             "x_mu_nl": None,
                             "x_logvar_nl": None,
@@ -94,6 +99,7 @@ class BaseFacHierVAE(object):
                             "lr_decay_factor": 0.8,
                             "l2_weight": 0.0001,
                             "alpha_dis": 1,
+                            "beta_dis": 1,
                             "max_grad_norm": None,
                             "opt": "adam",
                             "opt_opts": {}}
@@ -149,13 +155,21 @@ class BaseFacHierVAE(object):
 
         qz1_x, sampled_z1 = self._build_z1_encoder(inputs)
         mu1_table, mu1 = self._build_mu1_lookup(labels)
-        qz2_x, sampled_z2 = self._build_z2_encoder(inputs, sampled_z1)
-        px_z, sampled_x = self._build_decoder(sampled_z1, sampled_z2)
+
+        qz3_x, sampled_z3 = self._build_z3_encoder(inputs)
+        mu3_table, mu3 = self._build_mu3_lookup(labels)
+        
+        qz2_x, sampled_z2 = self._build_z2_encoder(inputs, sampled_z1, sampled_z3)
+        
+        px_z, sampled_x = self._build_decoder(sampled_z1, sampled_z2, sampled_z3)
 
         with tf.name_scope("costs"):
             # labeled data costs
             with tf.name_scope("log_pmu1"):
                 log_pmu1 = tf.reduce_sum(log_normal(mu1), axis=1)
+
+            with tf.name_scope("log_pmu3"):
+                log_pmu3 = tf.reduce_sum(log_normal(mu3), axis=1)
             
             with tf.name_scope("neg_kld_z1"):
                 logvar1 = tf.ones_like(mu1) * \
@@ -164,6 +178,14 @@ class BaseFacHierVAE(object):
                         np.log(np.power(self._model_conf["latent1_std"], 2))))
                 pz1 = [mu1, logvar1]
                 neg_kld_z1 = tf.reduce_sum(-1 * kld(*(qz1_x + pz1)), axis=1)
+
+            with tf.name_scope("neg_kld_z3"):
+                logvar1 = tf.ones_like(mu3) * \
+                        np.log(np.power(self._model_conf["latent3_std"], 2))
+                info("logvar of z3 given mu3 is %s" % (
+                        np.log(np.power(self._model_conf["latent3_std"], 2))))
+                pz3 = [mu3, logvar1]
+                neg_kld_z3 = tf.reduce_sum(-1 * kld(*(qz3_x + pz3)), axis=1)
 
             with tf.name_scope("neg_kld_z2"):
                 neg_kld_z2 = tf.reduce_sum(-1 * kld(*qz2_x), axis=1)
@@ -193,18 +215,30 @@ class BaseFacHierVAE(object):
                 logits = tf.reduce_sum(logits, axis=-1, name="qy1_logits")
                 log_qy1 = -sce_logits(labels=labels, logits=logits)
 
+            latent3_var = tf.pow(self._model_conf["latent3_std"], 2, name="latent3_var")
+
+            with tf.name_scope("log_qy3"):
+                # -(z3 - z3_mu3)^2/z3_var
+                logits = tf.expand_dims(qz3_x[0], 1) - tf.expand_dims(mu3_table, 0)
+                logits = -tf.pow(logits, 2) / (2 * latent3_var)
+                logits = tf.reduce_sum(logits, axis=-1, name="qy3_logits")
+                log_qy3 = -sce_logits(labels=labels, logits=logits)
+
             with tf.name_scope("lb"):
                 # original variational lower bound for labeled data
-                lb = logpx_z + neg_kld_z2 + neg_kld_z1 + (log_pmu1 / N)
+                # TODO: Ensure sizes associated with third scale agree with this normalization
+                lb = logpx_z + neg_kld_z2 + neg_kld_z1 + neg_kld_z3 + ((log_pmu1 + log_pmu3)/ N) 
 
+            #TODO: Rename following var in lieu of generalization
             with tf.name_scope("lb_alpha"):
                 # combine an additional weighted loss term
                 alpha = self._train_conf["alpha_dis"]
+                beta  = self._train_conf["beta_dis"]
                 if alpha == 0.0:
                     lb_alpha = lb
                     info("use non-discriminative training")
                 else:
-                    lb_alpha = lb + alpha * log_qy1
+                    lb_alpha = lb + alpha * log_qy1 + beta * log_qy3
                     info("use discriminative training")
 
             # L2 regularization
@@ -223,15 +257,18 @@ class BaseFacHierVAE(object):
                 # random variables/distributions
                 "mu1": mu1,
                 "qz1_x": qz1_x,
+                "qz3_x": qz3_x,
                 "qz2_x": qz2_x,
                 "px_z": px_z,
                 "sampled_z1": sampled_z1,
+                "sampled_z3": sampled_z3,
                 "sampled_z2": sampled_z2,
                 "sampled_x": sampled_x,
                 # costs
                 "log_pmu1": log_pmu1,
                 "neg_kld_z1": neg_kld_z1,
                 "neg_kld_z2": neg_kld_z2,
+                "neg_kld_z3": neg_kld_z3,
                 "logpx_z": logpx_z,
                 "log_qy1": log_qy1,
                 "lb": lb,
@@ -291,6 +328,10 @@ class BaseFacHierVAE(object):
         """return q(z1 | x), sampled_z1"""
         raise NotImplementedError
 
+    def _build_z3_encoder(self, inputs, reuse=False):
+        """return q(z3 | x), sampled_z3"""
+        raise NotImplementedError
+
     def _build_mu1_lookup(self, labels, reuse=False):
         n_class1 = self._model_conf["n_class1"]
         n_latent1 = self._model_conf["n_latent1"]
@@ -303,12 +344,24 @@ class BaseFacHierVAE(object):
                 mu1 = tf.gather(mu1_table, labels)
         return mu1_table, mu1
 
-    def _build_z2_encoder(self, inputs, z1, reuse=False):
-        """return q(z2 | x, z1), sampled_z2"""
+    def _build_mu3_lookup(self, labels, reuse=False):
+        n_class3 = self._model_conf["n_class3"]
+        n_latent3 = self._model_conf["n_latent3"]
+        with tf.variable_scope("mu3", reuse=reuse):
+            with tf.device("/cpu:0"):
+                mu3_table = tf.get_variable(
+                        name="mu3_table", 
+                        trainable=True,
+                        initializer=tf.random_normal([n_class3, n_latent3]))
+                mu3 = tf.gather(mu3_table, labels)
+        return mu3_table, mu3
+
+    def _build_z2_encoder(self, inputs, z1, z3, reuse=False):
+        """return q(z2 | x, z1, z3), sampled_z2"""
         raise NotImplementedError
 
-    def _build_decoder(self, z1, z2, reuse=False):
-        """return p(x | z1, z2), sampled_x"""
+    def _build_decoder(self, z1, z2, z3, reuse=False):
+        """return p(x | z1, z2, z3), sampled_x"""
         raise NotImplementedError
 
     def init_or_restore_model(self, sess, model_dir):

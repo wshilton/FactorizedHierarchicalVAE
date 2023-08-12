@@ -8,8 +8,8 @@ feat_type=spec
 
 # input sections
 exp_dir=exp/fhvae_lstm1L256_lat32_32_ad0_${feat_type}_20_20_uttid
-train_conf=conf/train/fhvae/e500_p50_lr1e-3_bs256_nbs2000_ad0.cfg
-model_conf=conf/model/fhvae/lstm_1L_256_lat_32_32.cfg
+train_conf=conf/train/fhvae/e500_p50_lr1e-3_bs256_nbs2000_ad0_bd0.cfg
+model_conf=conf/model/fhvae/lstm_1L_256_lat_32_32_32.cfg
 dataset_conf=data/${feat_type}_scp/dev_0330_tr90/dataset.cfg
 set_name=uttid
 

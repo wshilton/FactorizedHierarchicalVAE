@@ -15,8 +15,8 @@ from kaldi_io import BaseFloatVectorWriter as BFVWriter
 from kaldi_io import SequentialBaseFloatVectorReader as SBFVReader
 
 DEFAULT_SET_NAME="uttid"
-DEFAULT_TRAIN_CONF="conf/train/fhvae/e500_p50_lr1e-3_bs256_nbs2000_ad0.cfg"
-DEFAULT_MODEL_CONF="conf/model/fhvae/lstm_2L_256_lat_32_32.cfg"
+DEFAULT_TRAIN_CONF="conf/train/fhvae/e500_p50_lr1e-3_bs256_nbs2000_ad0_bd0.cfg"
+DEFAULT_MODEL_CONF="conf/model/fhvae/lstm_2L_256_lat_32_32_32.cfg"
 
 # flags for all actions
 tf.app.flags.DEFINE_boolean("debug", False, "debugging mode (for training) if True")
@@ -39,8 +39,10 @@ tf.app.flags.DEFINE_string("dataset_conf", "", "path to dataset config")
 tf.app.flags.DEFINE_integer("n_print_steps", 200, "print training diagnostics every N steps")
 
 tf.app.flags.DEFINE_float("alpha_dis", -1, "alpha for discriminative objective")
+tf.app.flags.DEFINE_float("beta_dis", -1, "beta for discriminative objective")
 tf.app.flags.DEFINE_integer("n_latent1", 0, "z1 dimension")
 tf.app.flags.DEFINE_integer("n_latent2", 0, "z2 dimension")
+tf.app.flags.DEFINE_integer("n_latent3", 0, "z3 dimension")
 
 # flags for non-train actions
 tf.app.flags.DEFINE_string("feat_rspec", "", "feat rspecifier to replace test_feat_rspec")
@@ -57,6 +59,7 @@ tf.app.flags.DEFINE_string("dev_utt_id_map", "", "path to utterance id map")
 tf.app.flags.DEFINE_string("test_utt_id_map", "", "path to utterance id map")
 tf.app.flags.DEFINE_boolean("use_z1", False, "dump z1")
 tf.app.flags.DEFINE_boolean("use_z2", True, "dump z2")
+tf.app.flags.DEFINE_boolean("use_z3", True, "dump z3")
 tf.app.flags.DEFINE_boolean("use_mean", True, "dump mean of selected latent vars")
 tf.app.flags.DEFINE_boolean("use_logvar", True, "dump logvar of selected latent vars")
 
@@ -83,6 +86,7 @@ tf.app.flags.DEFINE_string("repl_utt_id_map", "", "")
 tf.app.flags.DEFINE_integer("fac_n", 1, "")
 tf.app.flags.DEFINE_string("fac_z1_spec", "", "")
 tf.app.flags.DEFINE_string("fac_z2_spec", "", "")
+tf.app.flags.DEFINE_string("fac_z3_spec", "", "")
 tf.app.flags.DEFINE_string("fac_wspec", "", "")
 tf.app.flags.DEFINE_string("fac_img_dir", "", "")
 
@@ -271,6 +275,8 @@ def _load_configs(flags, model_parser, is_train):
                 model_conf["n_latent1"] = flags.n_latent1
             if flags.n_latent2 > 0:
                 model_conf["n_latent2"] = flags.n_latent2
+            if flags.n_latent3 > 0:
+                model_conf["n_latent3"] = flags.n_latent3
             with open("%s/model.cfg" % exp_dir, "w") as f:
                 model_parser.write_config(model_conf, f)
 
@@ -361,6 +367,7 @@ def _load_dump_latent_configs(flags, model_parser):
     dump_latent_opts = {
             "use_z1": flags.use_z1,
             "use_z2": flags.use_z2,
+            "use_z3": flags.use_z3,
             "use_mean": flags.use_mean, 
             "use_logvar": flags.use_logvar, 
             "utt_left_pad": utt_left_pad,
@@ -423,18 +430,22 @@ def _load_repl_repr_utt_configs(flags, model_parser):
 def _load_fac_configs(flags, model_parser):
     assert(flags.fac_z1_spec)
     assert(flags.fac_z2_spec)
+    assert(flags.fac_z3_spec)
     assert(flags.fac_wspec)
     assert(flags.fac_img_dir)
 
     fac_n = flags.fac_n
     z1_utt_list, z1_segs = _load_utt_or_seg_spec(flags.fac_z1_spec)
     z2_utt_list, z2_segs = _load_utt_or_seg_spec(flags.fac_z2_spec)
+    z3_utt_list, z3_segs = _load_utt_or_seg_spec(flags.fac_z3_spec)
     fac_opts = {
             "n": fac_n,
             "z1_utt_list": z1_utt_list,
             "z2_utt_list": z2_utt_list,
+            "z3_utt_list": z3_utt_list,
             "z1_segs": z1_segs,
-            "z2_segs": z2_segs}
+            "z2_segs": z2_segs,
+            "z3_segs": z3_segs}
     fac_wspec = flags.fac_wspec
     fac_img_dir = flags.fac_img_dir
     exp_dir, set_name, model_conf, train_conf, dataset_conf = \

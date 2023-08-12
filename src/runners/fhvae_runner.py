@@ -30,6 +30,7 @@ DEFAULT_WRITE_FN = lambda uttid, feats: print("%s\n%s" % (uttid, feats))
 DEFAULT_DUMP_LATENT_OPT = {
         "use_z1": False,
         "use_z2": True,
+        "use_z3": False,
         "use_mean": True,
         "use_logvar": True,
         "utt_left_pad": 0,
@@ -41,8 +42,10 @@ DEFAULT_VIS_FAC_OPT = {
         "n": 1,                 # number of segments drawn from each utt in *_utt_list
         "z1_utt_list": None,    # list of utterance for z1
         "z2_utt_list": None,    # list of utterance for z2
+        "z3_utt_list": None,
         "z1_segs": None,        # ignore `n` and `z1_utt_list`, segments for z1
         "z2_segs": None,        # ignore `n` and `z2_utt_list`, segments for z2
+        "z3_segs": None
         }
 DEFAULT_TRAV_OPT = {
         "n": 5,                 # number of seed segments
@@ -69,6 +72,7 @@ def train(exp_dir, set_name, model, train_set, dev_set,
     bs                  = train_conf.pop("bs")
     n_steps_per_epoch   = train_conf.pop("n_steps_per_epoch")
     latent1_var         = np.power(model.model_conf["latent1_std"], 2)
+    latent3_var         = np.power(model.model_conf["latent3_std"], 2)
     assert(n_steps_per_epoch > 0)
 
     model_dir = "%s/models" % exp_dir
@@ -76,13 +80,13 @@ def train(exp_dir, set_name, model, train_set, dev_set,
     ckpt_path = os.path.join(model_dir, "fhvae.ckpt")
     
     # create summaries
-    sum_names = ["lb", "logpx_z", "log_pmu1", "neg_kld_z1", "neg_kld_z2", "log_qy1"]
+    sum_names = ["lb", "logpx_z", "log_pmu1", "log_pmu3", "neg_kld_z1", "neg_kld_z2", "neg_kld_z3", "log_qy1", "log_qy3"]
     sum_vars = [tf.reduce_mean(model.outputs[name]) for name in sum_names]
     with tf.variable_scope("train"):
         train_summaries = tf.summary.merge(
                 [tf.summary.scalar(*p) for p in zip(sum_names, sum_vars)])
 
-    test_sum_names = ["lb", "logpx_z", "log_pmu1", "neg_kld_z1", "neg_kld_z2"]
+    test_sum_names = ["lb", "logpx_z", "log_pmu1", "log_pmu3", "neg_kld_z1", "neg_kld_z2", "neg_kld_z3"]
     test_sum_vars = [tf.reduce_mean(model.outputs[name]) for name in test_sum_names]
     with tf.variable_scope("test"):
         test_vars = OrderedDict([(name, tf.get_variable(name, initializer=0.)) \
@@ -162,7 +166,7 @@ def train(exp_dir, set_name, model, train_set, dev_set,
                         val_start_time = time.time()
                         dev_vals = _valid(
                                 sess, model, test_sum_names, test_sum_vars,
-                                dev_label_to_N, latent1_var, dev_iterator_fn)
+                                dev_label_to_N, latent1_var, latent3_var, dev_iterator_fn)
                         feed_dict = dict(zip(test_vars.values(), dev_vals.values()))
                         summary = sess.run(test_summaries, feed_dict)
                         dev_writer.add_summary(summary, global_step)
@@ -197,12 +201,13 @@ def test(exp_dir, set_name, model, test_set):
     test_iterator_fn    = lambda: test_set.iterator(2048, set_name)
     test_label_to_N     = test_set.get_label_N(set_name)
     latent1_var         = np.power(model.model_conf["latent1_std"], 2)
+    latent3_var         = np.power(model.model_conf["latent3_std"], 2)
 
     model_dir = "%s/models" % exp_dir
     ckpt_path = os.path.join(model_dir, "fhvae.ckpt")
 
     # create summaries
-    sum_names = ["lb", "logpx_z", "log_pmu1", "neg_kld_z1", "neg_kld_z2"]
+    sum_names = ["lb", "logpx_z", "log_pmu1", "log_pmu3", "neg_kld_z1", "neg_kld_z2", "neg_kld_z3"]
     sum_vars = [tf.reduce_mean(model.outputs[name]) for name in sum_names]
     
     with tf.variable_scope("test"):
@@ -219,7 +224,7 @@ def test(exp_dir, set_name, model, test_set):
 
         test_vals = _valid(
                 sess, model, sum_names, sum_vars, test_label_to_N, 
-                latent1_var, test_iterator_fn, debug=False)
+                latent1_var, latent3_var, test_iterator_fn, debug=False)
         feed_dict = dict(zip(test_vars.values(), test_vals.values()))
         summary, global_step = sess.run([test_summaries, model.global_step], feed_dict)
         test_writer.add_summary(summary, global_step)
@@ -275,6 +280,7 @@ def dump_repr(
     iterator_fn     = lambda: dataset.iterator(2048, repr_set_name)
     label_to_N      = dataset.get_label_N(repr_set_name)
     latent1_var     = np.power(model.model_conf["latent1_std"], 2)
+    latent3_var     = np.power(model.model_conf["latent3_std"], 2)
 
     model_dir = "%s/models" % exp_dir
     ckpt_path = os.path.join(model_dir, "fhvae.ckpt")
@@ -288,8 +294,10 @@ def dump_repr(
             label2repr = sess.run(model.outputs["mu1_table"], feed_dict={})
         elif opts["which_repr"] == "mu1":
             label2repr = _est_mu1(sess, model, label_to_N, latent1_var, iterator_fn, False)
+        elif opts["which_repr"] == "mu3":
+            label2repr = _est_mu3(sess, model, label_to_N, latent3_var, iterator_fn, False)
         elif opts["which_repr"] == "mu2":
-            label2repr = _est_mu2(sess, model, label_to_N, latent1_var, iterator_fn, False)
+            label2repr = _est_mu2(sess, model, label_to_N, latent1_var, latent3_var, iterator_fn, False)
 
         for label in sorted(label2repr.keys()):
             debug("writing %s" % label2str[label])
@@ -347,6 +355,7 @@ def factorize(exp_dir, model, dataset, write_fn=DEFAULT_WRITE_FN, opts=DEFAULT_V
     """
     assert(opts["z1_utt_list"] is not None or opts["z1_segs"] is not None)
     assert(opts["z2_utt_list"] is not None or opts["z2_segs"] is not None)
+    assert(opts["z3_utt_list"] is not None or opts["z3_segs"] is not None)
 
     iterator_by_utt_str_fn = \
             lambda utt_str: dataset.iterator_by_label(
@@ -375,27 +384,42 @@ def factorize(exp_dir, model, dataset, write_fn=DEFAULT_WRITE_FN, opts=DEFAULT_V
             X2, _, _, _ = dataset.sample_item(opts["z2_utt_list"], opts["n"])
             X2_utt_id_list = [utt_id for utt_id in opts["z2_utt_list"] for _ in xrange(opts["n"])]
 
+        if opts["z3_segs"]:
+            X3, _, _, _ = dataset.get_item_by_segs(opts["z3_segs"])
+            X3_utt_id_list = [seg.utt_id for seg in opts["z3_segs"]]
+        else:
+            X3, _, _, _ = dataset.sample_item(opts["z3_utt_list"], opts["n"])
+            X3_utt_id_list = [utt_id for utt_id in opts["z3_utt_list"] for _ in xrange(opts["n"])]
+
         Z1 = _encode_z1_mean_fn(sess, model, X1)
         Z2 = _encode_z2_mean_fn(sess, model, X2)
+        Z3 = _encode_z3_mean_fn(sess, model, X3)
 
         # X_fac[i,j] is combining i-th Z1 and j-th Z2
-        X_fac = np.array([[_decode_x_mean_fn(sess, model, [z1], [z2])[0] for z2 in Z2] for z1 in Z1])
+        X_fac = np.array([[[_decode_x_mean_fn(sess, model, [z1], [z2], [z3])[0] for z3 in Z3] for z2 in Z2] for z1 in Z1])
         raw_X_fac = np.array([dataset.undo_mvn(X_fac_row) for X_fac_row in X_fac])
-        raw_X1 = dataset.undo_mvn(_decode_x_mean_fn(sess, model, *_sample_z1_z2_fn(sess, model, X1)))
-        raw_X2 = dataset.undo_mvn(_decode_x_mean_fn(sess, model, *_sample_z1_z2_fn(sess, model, X2)))
+        raw_X1 = dataset.undo_mvn(_decode_x_mean_fn(sess, model, *_sample_z1_z2_z3_fn(sess, model, X1)))
+        raw_X2 = dataset.undo_mvn(_decode_x_mean_fn(sess, model, *_sample_z1_z2_z3_fn(sess, model, X2)))
+        raw_X3 = dataset.undo_mvn(_decode_x_mean_fn(sess, model, *_sample_z1_z2_z3_fn(sess, model, X3)))
         raw_X1_ori = dataset.undo_mvn(X1)
         raw_X2_ori = dataset.undo_mvn(X2)
-        
+        raw_X3_ori = dataset.undo_mvn(X3)
+
+        #TODO: Take a second look at this procedure re: generalization with k
         for i, (raw_X_fac_row, X1_utt_id) in enumerate(zip(raw_X_fac, X1_utt_id_list)):
             for j, (raw_x_fac, X2_utt_id) in enumerate(zip(raw_X_fac_row, X2_utt_id_list)):
-                utt_str_fac = "%s_%s_%s_FACSEP_%s" % (i, j, X1_utt_id, X2_utt_id)
-                write_fn(utt_str_fac, raw_x_fac)
+                for k, (raw_x_fac, X3_utt_id) in enumerate(zip(raw_X_fac_row, X3_utt_id_list)):    
+                    utt_str_fac = "%s_%s_%s_FACSEP_%s" % (i, j, k, X1_utt_id, X2_utt_id, X3_utt_id)
+                    write_fn(utt_str_fac, raw_x_fac)
         for i, (raw_x1, raw_x1_ori, X1_utt_id) in enumerate(zip(raw_X1, raw_X1_ori, X1_utt_id_list)):
             write_fn("%s_-1_%s_ori" % (i, X1_utt_id), raw_x1_ori)
             write_fn("%s_-1_%s" % (i, X1_utt_id), raw_x1)
         for i, (raw_x2, raw_x2_ori, X2_utt_id) in enumerate(zip(raw_X2, raw_X2_ori, X2_utt_id_list)):
             write_fn("-1_%s_%s_ori" % (i, X2_utt_id), raw_x2_ori)
             write_fn("-1_%s_%s" % (i, X2_utt_id), raw_x2)
+        for i, (raw_x3, raw_x3_ori, X3_utt_id) in enumerate(zip(raw_X3, raw_X3_ori, X3_utt_id_list)):
+            write_fn("-1_%s_%s_ori" % (i, X3_utt_id), raw_x3_ori)
+            write_fn("-1_%s_%s" % (i, X3_utt_id), raw_x3)
 
 def traverse(exp_dir, model, dataset, img_dir, opts=DEFAULT_TRAV_OPT):
     iterator_fn     = lambda: dataset.iterator(2048)
@@ -416,7 +440,7 @@ def traverse(exp_dir, model, dataset, img_dir, opts=DEFAULT_TRAV_OPT):
             seed_utt = dataset.sample_utt_id(opts["n"])
             seed_data, _, _, _ = dataset.sample_item(seed_utt, 1)
 
-        trav_z1_grids, trav_z2_grids = _traverse(
+        trav_z1_grids, trav_z2_grids, trav_z3_grids = _traverse(
                 sess, model, seed_data, opts["k"], opts["trav_range"])
 
     check_and_makedirs(img_dir)
@@ -436,6 +460,14 @@ def traverse(exp_dir, model, dataset, img_dir, opts=DEFAULT_TRAV_OPT):
                 mode="save", name="%s/z2_%s.png" % (img_dir, d),
                 feat_type=opts["feat_type"], figsize=opts["figsize"])
 
+    for d, trav_z3_grid in enumerate(trav_z3_grids):
+        trav_z3_grid = np.array([dataset.undo_mvn(trav_z3) for trav_z3 in trav_z3_grid])
+        plot_grids(
+                [trav_z3_grid[:, :1, ...], trav_z3_grid[:, 1:, ...]], 
+                labels=["", "traversal of z3, dim=%s" % d],
+                mode="save", name="%s/z3_%s.png" % (img_dir, d),
+                feat_type=opts["feat_type"], figsize=opts["figsize"])
+
 def _make_N(label_to_N, labels):
     assert(np.ndim(labels) == 1)
     return np.array([label_to_N[label] for label in labels])
@@ -444,10 +476,19 @@ def _make_mu1(label_to_mu1, labels):
     assert(np.ndim(labels) == 1)
     return np.array([label_to_mu1[label] for label in labels])
 
+def _make_mu3(label_to_mu3, labels):
+    assert(np.ndim(labels) == 1)
+    return np.array([label_to_mu3[label] for label in labels])
+
 def _encode_z1_mean_fn(sess, model, inputs):
     feed_dict = {model.feed_dict["inputs"]: inputs,
                  model.feed_dict["is_train"]: 0}
     return sess.run(model.outputs["qz1_x"][0], feed_dict)
+
+def _encode_z3_mean_fn(sess, model, inputs):
+    feed_dict = {model.feed_dict["inputs"]: inputs,
+                 model.feed_dict["is_train"]: 0}
+    return sess.run(model.outputs["qz3_x"][0], feed_dict)
 
 def _encode_z2_mean_fn(sess, model, inputs):
     """use z1 mean as sampled z1 for deterministic outputs"""
@@ -457,17 +498,18 @@ def _encode_z2_mean_fn(sess, model, inputs):
                  model.outputs["sampled_z1"]: Z1}
     return sess.run(model.outputs["qz2_x"][0], feed_dict)
 
-def _decode_x_mean_fn(sess, model, Z1, Z2):
+def _decode_x_mean_fn(sess, model, Z1, Z2, Z3):
     feed_dict = {
             model.outputs["sampled_z1"]: Z1,
             model.outputs["sampled_z2"]: Z2,
+            model.outputs["sampled_z3"]: Z3,
             model.feed_dict["is_train"]: 0}
     return sess.run(model.outputs["px_z"][0], feed_dict)
 
-def _sample_z1_z2_fn(sess, model, inputs):
+def _sample_z1_z2_z3_fn(sess, model, inputs):
     feed_dict = {model.feed_dict["inputs"]: inputs,
                  model.feed_dict["is_train"]: 0}
-    outputs = [model.outputs["sampled_z1"], model.outputs["sampled_z2"]]
+    outputs = [model.outputs["sampled_z1"], model.outputs["sampled_z2"], model.outputs["sampled_z3"]]
     return sess.run(outputs, feed_dict)
 
 def _est_mu1(sess, model, label_to_N, latent1_var, iterator_fn, debug=False):
@@ -498,7 +540,35 @@ def _est_mu1(sess, model, label_to_N, latent1_var, iterator_fn, debug=False):
         
     return label_to_mu1
 
-def _est_mu2(sess, model, label_to_N, latent1_var, iterator_fn, debug=False):
+def _est_mu3(sess, model, label_to_N, latent3_var, iterator_fn, debug=False):
+    """approximated MAP estimation of mu1 for dataset"""
+    label_to_acc_z3 = defaultdict(float)
+    label_to_mu3 = dict()
+    n_batches = 0
+    start_time = time.time()
+    for inputs, _, labels, _ in iterator_fn():
+        n_batches += 1
+        Z3 = _encode_z3_mean_fn(sess, model, inputs)
+        for label, z1 in zip(labels, Z3):
+            label_to_acc_z1[label] += z1
+        if debug and n_batches % 2000 == 0:
+            info("_est_mu3: took %.2f(s) to process %s batches" % (
+                time.time() - start_time, n_batches))
+            start_time = time.time()
+    acc_length = 0.0
+    for label, acc_z3 in label_to_acc_z3.iteritems():
+        label_to_mu3[label] = acc_z3 / (label_to_N[label] + latent3_var)
+        length = np.linalg.norm(label_to_mu3[label])
+        if debug:
+            info("length=%.2f, N=%s, label=%s" % ( 
+                length, label_to_N[label], label,))
+        acc_length += length
+    mean_length = acc_length / len(label_to_acc_z3)
+    info("averaged length = %.2f, #labels = %s" % (mean_length, len(label_to_acc_z3)))
+        
+    return label_to_mu3
+
+def _est_mu2(sess, model, label_to_N, latent1_var, latent3_var, iterator_fn, debug=False):
     """heuristic approximated MAP estimation of mu2 for dataset"""
     label_to_acc_z2 = defaultdict(float)
     label_to_mu2 = dict()
@@ -511,7 +581,7 @@ def _est_mu2(sess, model, label_to_N, latent1_var, iterator_fn, debug=False):
             label_to_acc_z2[label] += z2
     acc_length = 0.0
     for label, acc_z2 in label_to_acc_z2.iteritems():
-        label_to_mu2[label] = acc_z2 / (label_to_N[label] + latent1_var)
+        label_to_mu2[label] = acc_z2 / (label_to_N[label] + latent1_var + latent3_var)
         length = np.linalg.norm(label_to_mu2[label])
         if debug:
             info("length=%.2f, N=%s, label=%s" % (length, label_to_N[label], label,))
@@ -522,9 +592,11 @@ def _est_mu2(sess, model, label_to_N, latent1_var, iterator_fn, debug=False):
     return label_to_mu2
 
 def _valid(sess, model, sum_names, sum_vars, 
-        label_to_N, latent1_var, iterator_fn, debug=False):
+        label_to_N, latent1_var, latent3_var, iterator_fn, debug=False):
     label_to_mu1 = _est_mu1(
             sess, model, label_to_N, latent1_var, iterator_fn, debug)
+    label_to_mu3 = _est_mu3(
+            sess, model, label_to_N, latent3_var, iterator_fn, debug)
     # valid_n_class1 = int(max(label_to_mu1.keys())) + 1
     # mu1_shape = label_to_mu1.values()[0].shape
     # mu1_dtype = label_to_mu1.values()[0].dtype
@@ -539,6 +611,7 @@ def _valid(sess, model, sum_names, sum_vars,
         n_batches += 1
         N = _make_N(label_to_N, labels)
         mu1 = _make_mu1(label_to_mu1, labels)
+        mu3 = _make_mu3(label_to_mu3, labels)
         outputs = sess.run(
                 sum_vars, 
                 feed_dict={
@@ -548,12 +621,13 @@ def _valid(sess, model, sum_names, sum_vars,
                     model.feed_dict["targets"]: targets,
                     model.feed_dict["N"]: N,
                     model.outputs["mu1"]: mu1,
+                    model.outputs["mu3"]: mu1,
                     model.feed_dict["masks"]: np.ones_like(inputs),
                     model.feed_dict["is_train"]: 0})
         for name, val in zip(sum_names, outputs):
             vals[name] += val
         if debug and n_batches % 2000 == 0:
-            info("_est_mu1: took %.2f(s) to process %s batches" % (
+            info("_est_mu1 and _est_mu3: took %.2f(s) to process %s batches" % (
                 time.time() - start_time, n_batches))
             start_time = time.time()
     for name in vals:
@@ -567,24 +641,32 @@ def _traverse(sess, model, seed_data, k, trav_range):
             feed_dict={
                 model.feed_dict["inputs"]: seed_data,
                 model.feed_dict["is_train"]: 0})
+    seed_z3s = sess.run(
+            model.outputs["qz3_x"][0], 
+            feed_dict={
+                model.feed_dict["inputs"]: seed_data,
+                model.feed_dict["is_train"]: 0})
     seed_z2s = sess.run(
             model.outputs["qz2_x"][0], 
             feed_dict={
                 model.feed_dict["inputs"]: seed_data,
                 model.outputs["sampled_z1"]: seed_z1s,
+                model.outputs["sampled_z3"]: seed_z3s,
                 model.feed_dict["is_train"]: 0})
     data_shape = list(seed_data.shape[1:])
 
     # trav_grids is indexed by latent variable dimension being traversed
     trav_vals = np.linspace(trav_range[0], trav_range[1], k)
-    trav_z1_grids = [_traverse_dim(sess, model, seed_z1s, seed_z2s, data_shape, trav_vals, d, "z1") \
+    trav_z1_grids = [_traverse_dim(sess, model, seed_z1s, seed_z2s, seed_z3s, data_shape, trav_vals, d, "z1") \
             for d in xrange(seed_z1s.shape[-1])]
-    trav_z2_grids = [_traverse_dim(sess, model, seed_z1s, seed_z2s, data_shape, trav_vals, d, "z2") \
+    trav_z2_grids = [_traverse_dim(sess, model, seed_z1s, seed_z2s, seed_z3s, data_shape, trav_vals, d, "z2") \
             for d in xrange(seed_z2s.shape[-1])]
+    trav_z3_grids = [_traverse_dim(sess, model, seed_z1s, seed_z2s, seed_z3s, data_shape, trav_vals, d, "z3") \
+            for d in xrange(seed_z3s.shape[-1])]
 
-    return trav_z1_grids, trav_z2_grids
+    return trav_z1_grids, trav_z2_grids, trav_z3_grids
 
-def _traverse_dim(sess, model, seed_z1s, seed_z2s, data_shape, trav_vals, dim, which="z1"):
+def _traverse_dim(sess, model, seed_z1s, seed_z2s, seed_z3s, data_shape, trav_vals, dim, which="z1"):
     n, k = len(seed_z1s), len(trav_vals)
     def gen_flat_trav_and_fixed_lats(seed_lats_to_trav, seed_lats_fixed):
         trav_lats = np.array([
@@ -609,6 +691,7 @@ def _traverse_dim(sess, model, seed_z1s, seed_z2s, data_shape, trav_vals, dim, w
                 feed_dict={
                     model.outputs["sampled_z1"]: flat_trav_z1s,
                     model.outputs["sampled_z2"]: flat_fixed_z2s,
+                    
                     model.feed_dict["is_train"]: 0})
     elif which == "z2":
         flat_trav_z2s, flat_fixed_z1s = \
@@ -618,6 +701,17 @@ def _traverse_dim(sess, model, seed_z1s, seed_z2s, data_shape, trav_vals, dim, w
                 feed_dict={
                     model.outputs["sampled_z1"]: flat_fixed_z1s,
                     model.outputs["sampled_z2"]: flat_trav_z2s,
+                    model.outputs["sampled_z3"]: flat_trav_z3s,
+                    model.feed_dict["is_train"]: 0})
+    elif which == "z3":
+        flat_trav_z3s, flat_trav_z2s, flat_fixed_z1s = \
+                gen_flat_trav_and_fixed_lats(seed_z3s, seed_z2s, seed_z1s)
+        flat_trav_data = sess.run(
+                model.outputs["px_z"][0],
+                feed_dict={
+                    model.outputs["sampled_z1"]: flat_fixed_z1s,
+                    model.outputs["sampled_z2"]: flat_trav_z2s,
+                    model.outputs["sampled_z3"]: flat_trav_z3s,
                     model.feed_dict["is_train"]: 0})
     else:
         raise ValueError("invalid which (%s)" % which)
@@ -637,8 +731,9 @@ def _pad_feats(feats, left_pad, right_pad):
             np.tile(feats[-1], [right_pad] + tile_rep_suffix)])
     return feats
 
+#TODO: Determine if/how to modify Z3 as is done here with Z1.
 def _replace_repr(sess, model, inputs, src_repr, tar_repr):
-    Z1, Z2 = _sample_z1_z2_fn(sess, model, inputs)
+    Z1, Z2, Z3 = _sample_z1_z2_z3_fn(sess, model, inputs)
     Z1_mod = Z1 - src_repr[np.newaxis, :] + tar_repr[np.newaxis, :]
-    inputs_mod = _decode_x_mean_fn(sess, model, Z1_mod, Z2)
+    inputs_mod = _decode_x_mean_fn(sess, model, Z1_mod, Z2, Z3)
     return Z1, Z1_mod, Z2, inputs_mod
