@@ -11,7 +11,7 @@ kaldi_github:
 
 #Python wrappers for Kaldi data
 kaldi_python: kaldi
-	git clone https://github.com/janchorowski/kaldi-python.git kaldi_python
+	git clone https://github.com/wshilton/kaldi-python.git kaldi_python
 	cd kaldi_python; $(MAKE) all KALDI_ROOT=$(CURDIR)/kaldi
 
 clean:
